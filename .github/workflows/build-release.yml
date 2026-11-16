@@ -49,6 +49,32 @@ jobs:
           $clOptions = "$env:CL /I`"$atlInclude`""
           Add-Content -Path $env:GITHUB_ENV -Value "CL=$clOptions"
           Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$atlInclude;$env:INCLUDE"
+          $protoRoot = 'Submodules/ProtoInput'
+          foreach ($nativeProject in Get-ChildItem $protoRoot -Filter *.vcxproj -Recurse) {
+            [xml]$nativeXml = [System.IO.File]::ReadAllText($nativeProject.FullName)
+            $nativeNamespaces = New-Object System.Xml.XmlNamespaceManager($nativeXml.NameTable)
+            $nativeNamespaces.AddNamespace('msb', 'http://schemas.microsoft.com/developer/msbuild/2003')
+            foreach ($compiler in $nativeXml.SelectNodes('//msb:ItemDefinitionGroup/msb:ClCompile', $nativeNamespaces)) {
+              $directories = $compiler.SelectSingleNode('msb:AdditionalIncludeDirectories', $nativeNamespaces)
+              if (-not $directories) {
+                $directories = $nativeXml.CreateElement('AdditionalIncludeDirectories', 'http://schemas.microsoft.com/developer/msbuild/2003')
+                $compiler.AppendChild($directories) | Out-Null
+              }
+              $directories.InnerText = "$atlInclude;$($directories.InnerText)"
+            }
+            $nativeXml.Save($nativeProject.FullName)
+          }
+          foreach ($managedProject in @(
+            'Submodules/ProtoInput/lib/EasyHook/EasyHook/EasyHook.csproj',
+            'Submodules/ProtoInput/lib/EasyHook/EasyHookSvc/EasyHookSvc.csproj'
+          )) {
+            [xml]$managedXml = [System.IO.File]::ReadAllText((Resolve-Path $managedProject))
+            $managedNamespaces = New-Object System.Xml.XmlNamespaceManager($managedXml.NameTable)
+            $managedNamespaces.AddNamespace('msb', 'http://schemas.microsoft.com/developer/msbuild/2003')
+            $defaultConfiguration = $managedXml.SelectNodes('//msb:Configuration', $managedNamespaces) | Where-Object { $_.Condition -like "*== ''*" } | Select-Object -First 1
+            if ($defaultConfiguration) { $defaultConfiguration.InnerText = 'netfx4-Release' }
+            $managedXml.Save((Resolve-Path $managedProject))
+          }
 
       - name: Install .NET Framework 4.0 reference assemblies
         shell: pwsh
