@@ -125,83 +125,55 @@ jobs:
           if (-not $env:ATL_INCLUDE) { throw 'ATL_INCLUDE was not set by the Visual C++ setup step.' }
           $env:CL = "/I`"$env:ATL_INCLUDE`""
           $env:INCLUDE = "$env:ATL_INCLUDE;$env:INCLUDE"
-          $easyHook = 'Submodules/ProtoInput/lib/EasyHook'
+          $protoRoot = 'Submodules/ProtoInput'
+          $easyHook = Join-Path $protoRoot 'lib/EasyHook'
           $msbuildNamespace = 'http://schemas.microsoft.com/developer/msbuild/2003'
+
+          # EasyHook's native project references two legacy C# projects that are not
+          # members of ProtoInput.sln. Pin those references to their actual Release
+          # configurations; let MSBuild build them as part of the dependency graph.
           foreach ($projectFile in @(
-            "$easyHook/EasyHookDll/EasyHookDll.vcxproj",
-            "$easyHook/EasyHookSvc/EasyHookSvc.csproj"
+            (Join-Path $easyHook 'EasyHookDll/EasyHookDll.vcxproj'),
+            (Join-Path $easyHook 'EasyHookSvc/EasyHookSvc.csproj')
           )) {
             [xml]$projectXml = [System.IO.File]::ReadAllText((Resolve-Path $projectFile))
             $namespaces = New-Object System.Xml.XmlNamespaceManager($projectXml.NameTable)
             $namespaces.AddNamespace('msb', $msbuildNamespace)
             foreach ($reference in $projectXml.SelectNodes('//msb:ProjectReference', $namespaces)) {
-              if (-not $reference.SelectSingleNode('msb:SetConfiguration', $namespaces)) {
+              $configuration = $reference.SelectSingleNode('msb:SetConfiguration', $namespaces)
+              if (-not $configuration) {
                 $configuration = $projectXml.CreateElement('SetConfiguration', $msbuildNamespace)
-                $configuration.InnerText = 'Configuration=netfx4-Release'
                 $reference.AppendChild($configuration) | Out-Null
               }
-              if (-not $reference.SelectSingleNode('msb:SetPlatform', $namespaces)) {
+              $configuration.InnerText = 'Configuration=netfx4-Release'
+              $platform = $reference.SelectSingleNode('msb:SetPlatform', $namespaces)
+              if (-not $platform) {
                 $platform = $projectXml.CreateElement('SetPlatform', $msbuildNamespace)
-                $platform.InnerText = 'Platform=AnyCPU'
                 $reference.AppendChild($platform) | Out-Null
               }
+              $platform.InnerText = 'Platform=AnyCPU'
             }
             $projectXml.Save((Resolve-Path $projectFile))
           }
-          foreach ($project in @('EasyHook', 'EasyHookSvc')) {
-            $log = Join-Path $env:RUNNER_TEMP "$project-msbuild.log"
-            & msbuild "$easyHook/$project/$project.csproj" /p:Configuration=netfx4-Release /p:Platform=AnyCPU /p:BuildProjectReferences=false "/p:TargetFrameworkRootPath=$env:TargetFrameworkRootPath" /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
+
+          $solution = Join-Path $protoRoot 'src/ProtoInput/ProtoInput.sln'
+          foreach ($platform in @('x86', 'x64')) {
+            $log = Join-Path $env:RUNNER_TEMP "protoinput-$platform-msbuild.log"
+            $binaryLog = Join-Path $env:RUNNER_TEMP "protoinput-$platform.binlog"
+            Write-Host "Building ProtoInput solution for $platform with its MSBuild dependency graph."
+            & msbuild $solution /m /p:Configuration=Release "/p:Platform=$platform" /p:BuildProjectReferences=true /p:WindowsTargetPlatformVersion=10.0 "/bl:$binaryLog" /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
             $buildExitCode = $LASTEXITCODE
             if ($buildExitCode -ne 0) {
               $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
-              if (-not $diagnostics) { $diagnostics = Get-Content $log | Select-Object -Last 30 }
+              if (-not $diagnostics) { $diagnostics = Get-Content $log | Select-Object -Last 60 }
               foreach ($line in $diagnostics) {
                 $safeLine = $line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
                 Write-Host "::error::$safeLine"
               }
+              Write-Host "ProtoInput binary diagnostic log: $binaryLog"
               exit $buildExitCode
             }
           }
-          $protoSolutionDir = (Resolve-Path 'Submodules/ProtoInput/src/ProtoInput').Path + '\'
-          foreach ($platform in @('Win32', 'x64')) {
-            Write-Host "Prebuilding EasyHookDll and DEVOBJ for $platform"
-            $prebuildLog = Join-Path $env:RUNNER_TEMP "easyhookdll-$platform.log"
-            & msbuild "$easyHook/EasyHookDll/EasyHookDll.vcxproj" /m /p:Configuration=netfx4-Release "/p:Platform=$platform" /p:BuildProjectReferences=false "/p:SolutionDir=$protoSolutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $prebuildLog
-            $buildExitCode = $LASTEXITCODE
-            if ($buildExitCode -ne 0) {
-              $diagnostics = Get-Content $prebuildLog | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
-              if (-not $diagnostics) { $diagnostics = Get-Content $prebuildLog | Select-Object -Last 30 }
-              foreach ($line in $diagnostics) { Write-Host "::error::$($line.Replace('%', '%25'))" }
-              exit $buildExitCode
-            }
-            $prebuildLog = Join-Path $env:RUNNER_TEMP "devobj-$platform.log"
-            & msbuild 'Submodules/ProtoInput/lib/openxinput-OpenXinput1_4/DEVOBJ/DEVOBJ.vcxproj' /m /p:Configuration=Release "/p:Platform=$platform" /p:BuildProjectReferences=false "/p:SolutionDir=$protoSolutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $prebuildLog
-            $buildExitCode = $LASTEXITCODE
-            if ($buildExitCode -ne 0) {
-              $diagnostics = Get-Content $prebuildLog | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
-              if (-not $diagnostics) { $diagnostics = Get-Content $prebuildLog | Select-Object -Last 30 }
-              foreach ($line in $diagnostics) { Write-Host "::error::$($line.Replace('%', '%25'))" }
-              exit $buildExitCode
-            }
-          }
-          function Invoke-MSBuildWithDiagnostics([string]$Platform) {
-            $log = Join-Path $env:RUNNER_TEMP "protoinput-$Platform-msbuild.log"
-            $solution = 'Submodules/ProtoInput/src/ProtoInput/ProtoInput.sln'
-            Write-Host "Building ProtoInput for $Platform; detailed log: $log"
-            & msbuild $solution /m /p:Configuration=Release "/p:Platform=$Platform" /p:BuildProjectReferences=false /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
-            $buildExitCode = $LASTEXITCODE
-            if ($buildExitCode -ne 0) {
-              $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
-              if (-not $diagnostics) { $diagnostics = Get-Content $log | Select-Object -Last 30 }
-              foreach ($line in $diagnostics) {
-                $safeLine = $line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-                Write-Host "::error::$safeLine"
-              }
-              exit $buildExitCode
-            }
-          }
-          Invoke-MSBuildWithDiagnostics 'x86'
-          Invoke-MSBuildWithDiagnostics 'x64'
 
       - name: Build managed solution
         shell: pwsh
@@ -260,5 +232,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: NucleusCoop self-built ${{ github.sha }}
           body: Automated Windows Release build for commit ${{ github.sha }}.
+          token: ${{ github.token }}
           files: dist/NucleusCoop-SelfBuilt.zip
           fail_on_unmatched_files: true
