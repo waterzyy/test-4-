@@ -39,6 +39,15 @@ jobs:
           & $vsInstaller modify --installPath $vsInstallPath --add Microsoft.VisualStudio.Component.VC.ATL --add Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL --quiet --wait --norestart --nocache
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Install .NET Framework 4.0 reference assemblies
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $env:RUNNER_TEMP 'netfx-reference-assemblies'
+          nuget install Microsoft.NETFramework.ReferenceAssemblies.net40 -Version 1.0.3 -OutputDirectory $packageDir -NonInteractive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $frameworkRoot = (Resolve-Path (Join-Path $packageDir 'Microsoft.NETFramework.ReferenceAssemblies.net40.1.0.3/build/.NETFramework')).Path
+          Add-Content -Path $env:GITHUB_ENV -Value "TargetFrameworkRootPath=$frameworkRoot"
+
       - name: Restore solution packages
         shell: pwsh
         run: |
@@ -66,7 +75,7 @@ jobs:
           $easyHook = 'Submodules/ProtoInput/lib/EasyHook'
           foreach ($project in @('EasyHook', 'EasyHookSvc')) {
             $log = Join-Path $env:RUNNER_TEMP "$project-msbuild.log"
-            & msbuild "$easyHook/$project/$project.csproj" /p:Configuration=netfx4-Release /p:Platform=AnyCPU /p:BuildProjectReferences=false /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
+            & msbuild "$easyHook/$project/$project.csproj" /p:Configuration=netfx4-Release /p:Platform=AnyCPU /p:BuildProjectReferences=false "/p:TargetFrameworkRootPath=$env:TargetFrameworkRootPath" /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
             $buildExitCode = $LASTEXITCODE
             if ($buildExitCode -ne 0) {
               $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
