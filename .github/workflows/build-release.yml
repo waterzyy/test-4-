@@ -36,8 +36,17 @@ jobs:
           $vsInstallPath = (& $vswhere -latest -products '*' -property installationPath | Select-Object -First 1).Trim()
           if (-not $vsInstallPath) { throw 'Could not locate the Visual Studio installation.' }
           $vsInstaller = Join-Path (Split-Path $vswhere) 'vs_installer.exe'
-          & $vsInstaller modify --installPath $vsInstallPath --add Microsoft.VisualStudio.Component.VC.ATL --add Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL --quiet --wait --norestart --nocache
+          & $vsInstaller modify --installPath $vsInstallPath --add Microsoft.VisualStudio.Component.VC.ATL --add Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL --quiet --wait --norestart
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $atlHeader = Get-ChildItem (Join-Path $vsInstallPath 'VC/Tools/MSVC') -Filter atlbase.h -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $atlHeader) {
+            Write-Host '::error::Visual Studio ATL components completed without making atlbase.h available.'
+            exit 1
+          }
+          $atlInclude = $atlHeader.DirectoryName
+          Write-Host "Using ATL headers from $atlInclude"
+          $clOptions = "$env:CL /I`"$atlInclude`""
+          Add-Content -Path $env:GITHUB_ENV -Value "CL=$clOptions"
 
       - name: Install .NET Framework 4.0 reference assemblies
         shell: pwsh
