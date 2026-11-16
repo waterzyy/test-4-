@@ -65,8 +65,18 @@ jobs:
         run: |
           $easyHook = 'Submodules/ProtoInput/lib/EasyHook'
           foreach ($project in @('EasyHook', 'EasyHookSvc')) {
-            & msbuild "$easyHook/$project/$project.csproj" /p:Configuration=netfx4-Release /p:Platform=AnyCPU /p:BuildProjectReferences=false /verbosity:minimal
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $log = Join-Path $env:RUNNER_TEMP "$project-msbuild.log"
+            & msbuild "$easyHook/$project/$project.csproj" /p:Configuration=netfx4-Release /p:Platform=AnyCPU /p:BuildProjectReferences=false /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
+            $buildExitCode = $LASTEXITCODE
+            if ($buildExitCode -ne 0) {
+              $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
+              if (-not $diagnostics) { $diagnostics = Get-Content $log | Select-Object -Last 30 }
+              foreach ($line in $diagnostics) {
+                $safeLine = $line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                Write-Host "::error::$safeLine"
+              }
+              exit $buildExitCode
+            }
           }
           function Invoke-MSBuildWithDiagnostics([string]$Platform) {
             $log = Join-Path $env:RUNNER_TEMP "protoinput-$Platform-msbuild.log"
