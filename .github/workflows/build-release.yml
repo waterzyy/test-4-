@@ -63,9 +63,13 @@ jobs:
               $directories.InnerText = "$atlInclude;$($directories.InnerText)"
             }
             $nativeXml.Save($nativeProject.FullName)
-            if ($nativeProject.Name -eq 'BlackBone.vcxproj') {
-              $patchedText = [System.IO.File]::ReadAllText($nativeProject.FullName)
-              if (-not $patchedText.Contains($atlInclude)) { throw "ATL include path was not added to $($nativeProject.FullName)." }
+            $patchedText = [System.IO.File]::ReadAllText($nativeProject.FullName)
+            if (-not $patchedText.Contains($atlInclude)) {
+              $patchedText = $patchedText.Replace('<AdditionalIncludeDirectories>', "<AdditionalIncludeDirectories>$atlInclude;")
+              [System.IO.File]::WriteAllText($nativeProject.FullName, $patchedText)
+            }
+            if ($nativeProject.Name -eq 'BlackBone.vcxproj' -and -not $patchedText.Contains($atlInclude)) {
+              throw "ATL include path was not added to $($nativeProject.FullName)."
             }
           }
           foreach ($managedProject in @(
