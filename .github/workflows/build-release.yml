@@ -53,11 +53,24 @@ jobs:
       - name: Build ProtoInput native dependencies (x86 and x64)
         shell: pwsh
         run: |
-          $solution = 'Submodules/ProtoInput/src/ProtoInput/ProtoInput.sln'
-          msbuild $solution /m /p:Configuration=Release /p:Platform=x86 /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          msbuild $solution /m /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          function Invoke-MSBuildWithDiagnostics([string]$Platform) {
+            $log = Join-Path $env:RUNNER_TEMP "protoinput-$Platform-msbuild.log"
+            $solution = 'Submodules/ProtoInput/src/ProtoInput/ProtoInput.sln'
+            Write-Host "Building ProtoInput for $Platform; detailed log: $log"
+            & msbuild $solution /m /p:Configuration=Release "/p:Platform=$Platform" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
+            $buildExitCode = $LASTEXITCODE
+            if ($buildExitCode -ne 0) {
+              $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
+              if (-not $diagnostics) { $diagnostics = Get-Content $log | Select-Object -Last 30 }
+              foreach ($line in $diagnostics) {
+                $safeLine = $line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                Write-Host "::error::$safeLine"
+              }
+              exit $buildExitCode
+            }
+          }
+          Invoke-MSBuildWithDiagnostics 'x86'
+          Invoke-MSBuildWithDiagnostics 'x64'
 
       - name: Build managed solution
         shell: pwsh
