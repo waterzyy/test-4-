@@ -123,57 +123,76 @@ jobs:
         id: protoinput-build
         shell: pwsh
         run: |
-          if (-not $env:ATL_INCLUDE) { throw 'ATL_INCLUDE was not set by the Visual C++ setup step.' }
-          $env:CL = "/I`"$env:ATL_INCLUDE`""
-          $env:INCLUDE = "$env:ATL_INCLUDE;$env:INCLUDE"
-          $protoRoot = 'Submodules/ProtoInput'
-          $easyHook = Join-Path $protoRoot 'lib/EasyHook'
-          $msbuildNamespace = 'http://schemas.microsoft.com/developer/msbuild/2003'
+          try {
+            if (-not $env:ATL_INCLUDE) { throw 'ATL_INCLUDE was not set by the Visual C++ setup step.' }
+            Write-Host "Preparing ProtoInput; ATL headers: $env:ATL_INCLUDE"
+            $env:CL = "/I`"$env:ATL_INCLUDE`""
+            $env:INCLUDE = "$env:ATL_INCLUDE;$env:INCLUDE"
+            $protoRoot = 'Submodules/ProtoInput'
+            $easyHook = Join-Path $protoRoot 'lib/EasyHook'
+            $msbuildNamespace = 'http://schemas.microsoft.com/developer/msbuild/2003'
 
-          # EasyHook's native project references two legacy C# projects that are not
-          # members of ProtoInput.sln. Pin those references to their actual Release
-          # configurations; let MSBuild build them as part of the dependency graph.
-          foreach ($projectFile in @(
-            (Join-Path $easyHook 'EasyHookDll/EasyHookDll.vcxproj'),
-            (Join-Path $easyHook 'EasyHookSvc/EasyHookSvc.csproj')
-          )) {
-            [xml]$projectXml = [System.IO.File]::ReadAllText((Resolve-Path $projectFile))
-            $namespaces = New-Object System.Xml.XmlNamespaceManager($projectXml.NameTable)
-            $namespaces.AddNamespace('msb', $msbuildNamespace)
-            foreach ($reference in $projectXml.SelectNodes('//msb:ProjectReference', $namespaces)) {
-              $configuration = $reference.SelectSingleNode('msb:SetConfiguration', $namespaces)
-              if (-not $configuration) {
-                $configuration = $projectXml.CreateElement('SetConfiguration', $msbuildNamespace)
-                $reference.AppendChild($configuration) | Out-Null
+            # EasyHook's native project references two legacy C# projects that are not
+            # members of ProtoInput.sln. Pin those references to their actual Release
+            # configurations; let MSBuild build them as part of the dependency graph.
+            foreach ($projectFile in @(
+              (Join-Path $easyHook 'EasyHookDll/EasyHookDll.vcxproj'),
+              (Join-Path $easyHook 'EasyHookSvc/EasyHookSvc.csproj')
+            )) {
+              Write-Host "Preparing EasyHook project references in $projectFile"
+              [xml]$projectXml = [System.IO.File]::ReadAllText((Resolve-Path $projectFile))
+              $namespaces = New-Object System.Xml.XmlNamespaceManager($projectXml.NameTable)
+              $namespaces.AddNamespace('msb', $msbuildNamespace)
+              foreach ($reference in $projectXml.SelectNodes('//msb:ProjectReference', $namespaces)) {
+                $configuration = $reference.SelectSingleNode('msb:SetConfiguration', $namespaces)
+                if (-not $configuration) {
+                  $configuration = $projectXml.CreateElement('SetConfiguration', $msbuildNamespace)
+                  $reference.AppendChild($configuration) | Out-Null
+                }
+                $configuration.InnerText = 'Configuration=netfx4-Release'
+                $platform = $reference.SelectSingleNode('msb:SetPlatform', $namespaces)
+                if (-not $platform) {
+                  $platform = $projectXml.CreateElement('SetPlatform', $msbuildNamespace)
+                  $reference.AppendChild($platform) | Out-Null
+                }
+                $platform.InnerText = 'Platform=AnyCPU'
               }
-              $configuration.InnerText = 'Configuration=netfx4-Release'
-              $platform = $reference.SelectSingleNode('msb:SetPlatform', $namespaces)
-              if (-not $platform) {
-                $platform = $projectXml.CreateElement('SetPlatform', $msbuildNamespace)
-                $reference.AppendChild($platform) | Out-Null
-              }
-              $platform.InnerText = 'Platform=AnyCPU'
+              $projectXml.Save((Resolve-Path $projectFile))
             }
-            $projectXml.Save((Resolve-Path $projectFile))
-          }
 
-          $solution = Join-Path $protoRoot 'src/ProtoInput/ProtoInput.sln'
-          foreach ($platform in @('x86', 'x64')) {
-            $log = Join-Path $env:RUNNER_TEMP "protoinput-$platform-msbuild.log"
-            $binaryLog = Join-Path $env:RUNNER_TEMP "protoinput-$platform.binlog"
-            Write-Host "Building ProtoInput solution for $platform with its MSBuild dependency graph."
-            & msbuild $solution /m /p:Configuration=Release "/p:Platform=$platform" /p:BuildProjectReferences=true /p:WindowsTargetPlatformVersion=10.0 "/bl:$binaryLog" /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
-            $buildExitCode = $LASTEXITCODE
-            if ($buildExitCode -ne 0) {
-              $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
-              if (-not $diagnostics) { $diagnostics = Get-Content $log | Select-Object -Last 60 }
-              foreach ($line in $diagnostics) {
-                $safeLine = $line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-                Write-Host "::error::$safeLine"
+            $solution = Join-Path $protoRoot 'src/ProtoInput/ProtoInput.sln'
+            foreach ($platform in @('x86', 'x64')) {
+              $log = Join-Path $env:RUNNER_TEMP "protoinput-$platform-msbuild.log"
+              $binaryLog = Join-Path $env:RUNNER_TEMP "protoinput-$platform.binlog"
+              Write-Host "Building ProtoInput solution for $platform with its MSBuild dependency graph."
+              & msbuild $solution /m /p:Configuration=Release "/p:Platform=$platform" /p:BuildProjectReferences=true /p:WindowsTargetPlatformVersion=10.0 "/bl:$binaryLog" /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
+              $buildExitCode = $LASTEXITCODE
+              if ($buildExitCode -ne 0) {
+                $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
+                if (-not $diagnostics) { $diagnostics = Get-Content $log | Select-Object -Last 60 }
+                foreach ($line in $diagnostics) {
+                  $safeLine = $line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                  Write-Host "::error::$safeLine"
+                }
+                Write-Host "ProtoInput binary diagnostic log: $binaryLog"
+                exit $buildExitCode
               }
-              Write-Host "ProtoInput binary diagnostic log: $binaryLog"
-              exit $buildExitCode
             }
+          } catch {
+            $message = $_.Exception.ToString()
+            $location = $_.InvocationInfo.PositionMessage
+            $details = "$message`n$location".Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=ProtoInput build-step exception::$details"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value @(
+              '### ProtoInput build-step exception',
+              '',
+              '```text',
+              $message,
+              $location,
+              '```',
+              ''
+            )
+            throw
           }
 
       - name: Surface ProtoInput build logs
