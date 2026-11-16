@@ -1,0 +1,116 @@
+name: Build and publish NucleusCoop
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nucleuscoop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout (including recursive submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Set up NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Restore solution packages
+        shell: pwsh
+        run: |
+          nuget restore Master/NucleusCoop.sln
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          nuget restore Submodules/ProtoInput/src/ProtoInput/ProtoInput.sln
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Nucleus native hooks (x86 and x64)
+        shell: pwsh
+        run: |
+          $solution = 'Master/NucleusCoop.sln'
+          msbuild $solution '/t:Nucleus.Hook;Nucleus.SHook' /m /p:Configuration=Release /p:Platform=Win32 /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          msbuild $solution '/t:Nucleus.Hook;Nucleus.SHook' /m /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build ProtoInput native dependencies (x86 and x64)
+        shell: pwsh
+        run: |
+          $solution = 'Submodules/ProtoInput/src/ProtoInput/ProtoInput.sln'
+          msbuild $solution /m /p:Configuration=Release /p:Platform=x86 /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          msbuild $solution /m /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build managed solution
+        shell: pwsh
+        run: |
+          msbuild Master/NucleusCoop.sln /m /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /p:RestorePackages=false /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble distribution archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $PWD 'dist/NucleusCoop'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $mainOutput = 'Master/NucleusCoopTool/bin/Release'
+          if (-not (Test-Path "$mainOutput/NucleusCoop.exe")) {
+            throw "Expected app output was not produced: $mainOutput/NucleusCoop.exe"
+          }
+          Copy-Item "$mainOutput/*" $dist -Recurse -Force
+
+          # Include per-project outputs and native binaries not copied by the app's post-build step.
+          $extraOutputDirs = @(
+            'Master/NucleusGaming/bin/Release/bin',
+            'Master/StartGame/bin/Release',
+            'Master/Nucleus.Inject/bin/x64/Release',
+            'Master/x64/Release',
+            'Master/Win32/Release',
+            'Submodules/ProtoInput/src/ProtoInput/Release/x64'
+          )
+          foreach ($dir in $extraOutputDirs) {
+            if (Test-Path $dir) {
+              $leaf = Split-Path $dir -Leaf
+              $target = Join-Path $dist "_build-output/$leaf"
+              New-Item -ItemType Directory -Force -Path $target | Out-Null
+              Copy-Item "$dir/*" $target -Recurse -Force
+            }
+          }
+
+          # Ensure the runtime utilities/resources folder is present in the packaged app.
+          if (-not (Test-Path (Join-Path $dist 'utils'))) {
+            $utilsSource = 'Master/NucleusCoopTool/copyoutput/utils'
+            if (Test-Path $utilsSource) { Copy-Item $utilsSource $dist -Recurse -Force }
+          }
+          if (-not (Test-Path (Join-Path $dist 'utils'))) {
+            throw 'The distribution is missing the required utils directory.'
+          }
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path $dist -DestinationPath dist/NucleusCoop-SelfBuilt.zip -CompressionLevel Optimal -Force
+          if (-not (Test-Path 'dist/NucleusCoop-SelfBuilt.zip')) { throw 'Archive creation failed.' }
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0-custom-${{ github.sha }}
+          target_commitish: ${{ github.sha }}
+          name: NucleusCoop self-built ${{ github.sha }}
+          body: Automated Windows Release build for commit ${{ github.sha }}.
+          files: dist/NucleusCoop-SelfBuilt.zip
+          fail_on_unmatched_files: true
