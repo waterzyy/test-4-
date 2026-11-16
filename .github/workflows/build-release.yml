@@ -45,8 +45,10 @@ jobs:
           }
           $atlInclude = $atlHeader.DirectoryName
           Write-Host "Using ATL headers from $atlInclude"
+          Write-Host "::notice title=ATL include directory::$atlInclude"
           $clOptions = "$env:CL /I`"$atlInclude`""
           Add-Content -Path $env:GITHUB_ENV -Value "CL=$clOptions"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$atlInclude;$env:INCLUDE"
 
       - name: Install .NET Framework 4.0 reference assemblies
         shell: pwsh
@@ -85,6 +87,28 @@ jobs:
         shell: pwsh
         run: |
           $easyHook = 'Submodules/ProtoInput/lib/EasyHook'
+          $msbuildNamespace = 'http://schemas.microsoft.com/developer/msbuild/2003'
+          foreach ($projectFile in @(
+            "$easyHook/EasyHookDll/EasyHookDll.vcxproj",
+            "$easyHook/EasyHookSvc/EasyHookSvc.csproj"
+          )) {
+            [xml]$projectXml = [System.IO.File]::ReadAllText((Resolve-Path $projectFile))
+            $namespaces = New-Object System.Xml.XmlNamespaceManager($projectXml.NameTable)
+            $namespaces.AddNamespace('msb', $msbuildNamespace)
+            foreach ($reference in $projectXml.SelectNodes('//msb:ProjectReference', $namespaces)) {
+              if (-not $reference.SelectSingleNode('msb:SetConfiguration', $namespaces)) {
+                $configuration = $projectXml.CreateElement('SetConfiguration', $msbuildNamespace)
+                $configuration.InnerText = 'Configuration=netfx4-Release'
+                $reference.AppendChild($configuration) | Out-Null
+              }
+              if (-not $reference.SelectSingleNode('msb:SetPlatform', $namespaces)) {
+                $platform = $projectXml.CreateElement('SetPlatform', $msbuildNamespace)
+                $platform.InnerText = 'Platform=AnyCPU'
+                $reference.AppendChild($platform) | Out-Null
+              }
+            }
+            $projectXml.Save((Resolve-Path $projectFile))
+          }
           foreach ($project in @('EasyHook', 'EasyHookSvc')) {
             $log = Join-Path $env:RUNNER_TEMP "$project-msbuild.log"
             & msbuild "$easyHook/$project/$project.csproj" /p:Configuration=netfx4-Release /p:Platform=AnyCPU /p:BuildProjectReferences=false "/p:TargetFrameworkRootPath=$env:TargetFrameworkRootPath" /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
@@ -103,7 +127,7 @@ jobs:
             $log = Join-Path $env:RUNNER_TEMP "protoinput-$Platform-msbuild.log"
             $solution = 'Submodules/ProtoInput/src/ProtoInput/ProtoInput.sln'
             Write-Host "Building ProtoInput for $Platform; detailed log: $log"
-            & msbuild $solution /m /p:Configuration=Release "/p:Platform=$Platform" /p:BuildProjectReferences=false /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
+            & msbuild $solution /m /p:Configuration=Release "/p:Platform=$Platform" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
             $buildExitCode = $LASTEXITCODE
             if ($buildExitCode -ne 0) {
               $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
