@@ -45,7 +45,10 @@ jobs:
           $packageDir = Join-Path $env:RUNNER_TEMP 'netfx-reference-assemblies'
           nuget install Microsoft.NETFramework.ReferenceAssemblies.net40 -Version 1.0.3 -OutputDirectory $packageDir -NonInteractive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $frameworkRoot = (Resolve-Path (Join-Path $packageDir 'Microsoft.NETFramework.ReferenceAssemblies.net40.1.0.3/build/.NETFramework')).Path
+          $frameworkRoot = (Resolve-Path (Join-Path $packageDir 'Microsoft.NETFramework.ReferenceAssemblies.net40.1.0.3/build')).Path
+          if (-not (Test-Path (Join-Path $frameworkRoot '.NETFramework/v4.0/mscorlib.dll'))) {
+            throw "The .NET Framework 4.0 reference assemblies were not found beneath $frameworkRoot."
+          }
           Add-Content -Path $env:GITHUB_ENV -Value "TargetFrameworkRootPath=$frameworkRoot"
 
       - name: Restore solution packages
