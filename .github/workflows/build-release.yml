@@ -40,11 +40,15 @@ jobs:
       - name: Build Nucleus native hooks (x86 and x64)
         shell: pwsh
         run: |
-          $solution = 'Master/NucleusCoop.sln'
-          msbuild $solution '/t:Nucleus.Hook;Nucleus.SHook' /m /p:Configuration=Release /p:Platform=Win32 /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          msbuild $solution '/t:Nucleus.Hook;Nucleus.SHook' /m /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $solutionDir = (Resolve-Path 'Master').Path + '\'
+          foreach ($platform in @('Win32', 'x64')) {
+            foreach ($project in @('Nucleus.Hook', 'Nucleus.SHook')) {
+              $projectFile = "Master/$project/$project.vcxproj"
+              Write-Host "Building $project for $platform"
+              & msbuild $projectFile /m /p:Configuration=Release "/p:Platform=$platform" "/p:SolutionDir=$solutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          }
 
       - name: Build ProtoInput native dependencies (x86 and x64)
         shell: pwsh
