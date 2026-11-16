@@ -63,6 +63,10 @@ jobs:
               $directories.InnerText = "$atlInclude;$($directories.InnerText)"
             }
             $nativeXml.Save($nativeProject.FullName)
+            if ($nativeProject.Name -eq 'BlackBone.vcxproj') {
+              $patchedText = [System.IO.File]::ReadAllText($nativeProject.FullName)
+              if (-not $patchedText.Contains($atlInclude)) { throw "ATL include path was not added to $($nativeProject.FullName)." }
+            }
           }
           foreach ($managedProject in @(
             'Submodules/ProtoInput/lib/EasyHook/EasyHook/EasyHook.csproj',
@@ -149,11 +153,19 @@ jobs:
               exit $buildExitCode
             }
           }
+          $protoSolutionDir = (Resolve-Path 'Submodules/ProtoInput/src/ProtoInput').Path + '\'
+          foreach ($platform in @('Win32', 'x64')) {
+            Write-Host "Prebuilding EasyHookDll and DEVOBJ for $platform"
+            & msbuild "$easyHook/EasyHookDll/EasyHookDll.vcxproj" /m /p:Configuration=netfx4-Release "/p:Platform=$platform" /p:BuildProjectReferences=false "/p:SolutionDir=$protoSolutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & msbuild 'Submodules/ProtoInput/lib/openxinput-OpenXinput1_4/DEVOBJ/DEVOBJ.vcxproj' /m /p:Configuration=Release "/p:Platform=$platform" /p:BuildProjectReferences=false "/p:SolutionDir=$protoSolutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           function Invoke-MSBuildWithDiagnostics([string]$Platform) {
             $log = Join-Path $env:RUNNER_TEMP "protoinput-$Platform-msbuild.log"
             $solution = 'Submodules/ProtoInput/src/ProtoInput/ProtoInput.sln'
             Write-Host "Building ProtoInput for $Platform; detailed log: $log"
-            & msbuild $solution /m /p:Configuration=Release "/p:Platform=$Platform" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
+            & msbuild $solution /m /p:Configuration=Release "/p:Platform=$Platform" /p:BuildProjectReferences=false /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $log
             $buildExitCode = $LASTEXITCODE
             if ($buildExitCode -ne 0) {
               $diagnostics = Get-Content $log | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
