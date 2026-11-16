@@ -156,10 +156,24 @@ jobs:
           $protoSolutionDir = (Resolve-Path 'Submodules/ProtoInput/src/ProtoInput').Path + '\'
           foreach ($platform in @('Win32', 'x64')) {
             Write-Host "Prebuilding EasyHookDll and DEVOBJ for $platform"
-            & msbuild "$easyHook/EasyHookDll/EasyHookDll.vcxproj" /m /p:Configuration=netfx4-Release "/p:Platform=$platform" /p:BuildProjectReferences=false "/p:SolutionDir=$protoSolutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & msbuild 'Submodules/ProtoInput/lib/openxinput-OpenXinput1_4/DEVOBJ/DEVOBJ.vcxproj' /m /p:Configuration=Release "/p:Platform=$platform" /p:BuildProjectReferences=false "/p:SolutionDir=$protoSolutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $prebuildLog = Join-Path $env:RUNNER_TEMP "easyhookdll-$platform.log"
+            & msbuild "$easyHook/EasyHookDll/EasyHookDll.vcxproj" /m /p:Configuration=netfx4-Release "/p:Platform=$platform" /p:BuildProjectReferences=false "/p:SolutionDir=$protoSolutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $prebuildLog
+            $buildExitCode = $LASTEXITCODE
+            if ($buildExitCode -ne 0) {
+              $diagnostics = Get-Content $prebuildLog | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
+              if (-not $diagnostics) { $diagnostics = Get-Content $prebuildLog | Select-Object -Last 30 }
+              foreach ($line in $diagnostics) { Write-Host "::error::$($line.Replace('%', '%25'))" }
+              exit $buildExitCode
+            }
+            $prebuildLog = Join-Path $env:RUNNER_TEMP "devobj-$platform.log"
+            & msbuild 'Submodules/ProtoInput/lib/openxinput-OpenXinput1_4/DEVOBJ/DEVOBJ.vcxproj' /m /p:Configuration=Release "/p:Platform=$platform" /p:BuildProjectReferences=false "/p:SolutionDir=$protoSolutionDir" /p:WindowsTargetPlatformVersion=10.0 /verbosity:minimal 2>&1 | Tee-Object -FilePath $prebuildLog
+            $buildExitCode = $LASTEXITCODE
+            if ($buildExitCode -ne 0) {
+              $diagnostics = Get-Content $prebuildLog | Where-Object { $_ -match 'error|fatal|MSB[0-9]{4}' }
+              if (-not $diagnostics) { $diagnostics = Get-Content $prebuildLog | Select-Object -Last 30 }
+              foreach ($line in $diagnostics) { Write-Host "::error::$($line.Replace('%', '%25'))" }
+              exit $buildExitCode
+            }
           }
           function Invoke-MSBuildWithDiagnostics([string]$Platform) {
             $log = Join-Path $env:RUNNER_TEMP "protoinput-$Platform-msbuild.log"
