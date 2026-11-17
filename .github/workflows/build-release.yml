@@ -30,6 +30,7 @@ jobs:
         uses: nuget/setup-nuget@v2
 
       - name: Install Visual C++ ATL headers required by ProtoInput
+        id: atl-headers
         shell: pwsh
         run: |
           $vswhere = Join-Path "${env:ProgramFiles(x86)}" 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -46,10 +47,7 @@ jobs:
           $atlInclude = $atlHeader.DirectoryName
           Write-Host "Using ATL headers from $atlInclude"
           Write-Host "::notice title=ATL include directory::$atlInclude"
-          $clOptions = "$env:CL /I`"$atlInclude`""
-          Add-Content -Path $env:GITHUB_ENV -Value "ATL_INCLUDE=$atlInclude"
-          Add-Content -Path $env:GITHUB_ENV -Value "CL=$clOptions"
-          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$atlInclude;$env:INCLUDE"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "atl_include=$atlInclude"
           $protoRoot = 'Submodules/ProtoInput'
           foreach ($nativeProject in Get-ChildItem $protoRoot -Filter *.vcxproj -Recurse) {
             [xml]$nativeXml = [System.IO.File]::ReadAllText($nativeProject.FullName)
@@ -121,6 +119,8 @@ jobs:
 
       - name: Build ProtoInput native dependencies (x86 and x64)
         id: protoinput-build
+        env:
+          ATL_INCLUDE: ${{ steps.atl-headers.outputs.atl_include }}
         shell: pwsh
         run: |
           try {
